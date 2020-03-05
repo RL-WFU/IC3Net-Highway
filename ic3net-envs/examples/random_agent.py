@@ -13,7 +13,7 @@ class RandomAgent(object):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Example GCCNet environment random agent')
     parser.add_argument('--nagents', type=int, default=8, help="Number of agents")
-    parser.add_argument('--display', action="store_true", default=False,
+    parser.add_argument('--display', action="store_true", default=True,
                         help="Use to display environment")
 
     env = TrafficJunctionEnv()
@@ -35,7 +35,7 @@ if __name__ == '__main__':
     agent = RandomAgent(env.action_space)
     episodes = 0
 
-    while episodes < 1:
+    while episodes < 3:
         obs = env.reset()
         done = False
         counter = 0
@@ -45,7 +45,7 @@ if __name__ == '__main__':
             for _ in range(args.nagents):
                 action = agent.act()
                 actions.append(action)
-            obs, reward, done, info = env.step(actions, counter)
+            obs, reward, done, info = env.step(actions)
 
             counter = counter + 1 #MAKE SURE TO ADD COUNTER INTO MAIN
             if args.display:

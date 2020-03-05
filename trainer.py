@@ -105,6 +105,7 @@ class Trainer(object):
             episode.append(trans)
             state = next_state
             if done:
+                print("Hello")
                 break
         stat['num_steps'] = t + 1
         stat['steps_taken'] = stat['num_steps']
@@ -231,7 +232,7 @@ class Trainer(object):
         while len(batch) < self.args.batch_size:
             if self.args.batch_size - len(batch) <= self.args.max_steps:
                 self.last_step = True
-            episode, episode_stat = self.get_episode(epoch)
+            episode, episode_stat = self.get_episode(epoch) #Not resetting the environment
             merge_stat(episode_stat, self.stats)
             self.stats['num_episodes'] += 1
             batch += episode
@@ -239,6 +240,7 @@ class Trainer(object):
         self.last_step = False
         self.stats['num_steps'] = len(batch)
         batch = Transition(*zip(*batch))
+        print("End batch")
         return batch, self.stats
 
     # only used when nprocesses=1

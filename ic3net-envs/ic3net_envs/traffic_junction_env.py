@@ -47,9 +47,14 @@ class TrafficJunctionEnv(gym.Env):
 
         self.FRONT_PENALTY = -0.5 #Penalty for not having a car directly in front of you (excluding first car)
         self.BACK_PENALTY = -0.2 #Penalty for not having a car directly behind you (excluding last car)
+        self.ACC_PENALTY = -0.05 #Penalty for accelerating (so that the cars are led to stay at constant speed)
 
         self.episode_over = False
         self.has_failed = 0
+
+        self.counter = 0
+
+
 
         self.isFull = False
 
@@ -92,7 +97,9 @@ class TrafficJunctionEnv(gym.Env):
             setattr(self, key, getattr(args, key))
 
         self.ncar = args.nagents
-        self.dims = dims = (self.dim, self.dim)
+        self.h = self.dim
+        self.w = 2
+        self.dims = dims = (self.h, self.w)
         difficulty = args.difficulty
         vision = args.vision
 
@@ -156,6 +163,8 @@ class TrafficJunctionEnv(gym.Env):
 
         self._set_grid()
 
+
+
         if difficulty == 'easy':
             self._set_paths_easy()
         else:
@@ -207,9 +216,13 @@ class TrafficJunctionEnv(gym.Env):
 
         # Observation will be ncar * vision * vision ndarray
         obs = self._get_obs()
+
+        self.isFull = False
+        self.counter = 0
+
         return obs
 
-    def step(self, action, counter):
+    def step(self, action):
         """
         The agents(car) take a step in the environment.
 
@@ -233,7 +246,7 @@ class TrafficJunctionEnv(gym.Env):
 
 
 
-        print(action) #This is an array of size ncars, with each element either 0 or 1 - I think each index refers to a single car
+        #print(action) #This is an array of size ncars, with each element either 0 or 1 - I think each index refers to a single car
 
         assert np.all(action <= self.naction), "Actions should be in the range [0,naction)."
 
@@ -245,10 +258,15 @@ class TrafficJunctionEnv(gym.Env):
         for i, a in enumerate(action):
             self._take_action(i, a)
 
-        self._add_cars(counter)
+
+        self._add_cars()
 
         obs = self._get_obs()
         reward = self._get_reward() #Getting reward for every single car
+
+        for i in range(len(reward)):
+            if action[i] == 2:
+                reward[i] += self.ACC_PENALTY
 
 
 
@@ -261,7 +279,23 @@ class TrafficJunctionEnv(gym.Env):
         self.stat['success'] = 1 - self.has_failed
         self.stat['add_rate'] = self.add_rate
 
+        self.counter += 1
+
+
+        for i in range(self.ncar):
+            if self.alive_mask[i] == 1:
+                self.episode_over = False
+                break
+            elif self.alive_mask[i] == 0:
+                self.episode_over = True
+
+        print(self.episode_over)
+
         return obs, reward, self.episode_over, debug
+
+    #FIXME - when running through the script, once cars start exiting the simulation trainer has no action element to act on. Once all cars exit the simulation
+    #FIXME - the trainer has no action to look at so the running just stops. I am wondering if we want to make this a continuous exercise, where there is no end
+    #FIXME - but rather when a car exits the simulation it just starts back up at the top with a reset reward and everything? I don't know if that would be too much
 
     def render(self, mode='human', close=False):
 
@@ -274,38 +308,38 @@ class TrafficJunctionEnv(gym.Env):
         for i, p in enumerate(self.car_loc):
             if self.car_last_act[i] == 0: # GAS
                 if grid[p[0]][p[1]] != 0: #EMPTY SPACE IN FRONT
-                    grid[p[0]][p[1]] = str(grid[p[0]][p[1]]).replace('_','') + '<>'
+                    grid[p[0]][p[1]] = str(grid[p[0]][p[1]]).replace('_','') + '<'+str(i)+'>' #Added the str(i) to keep track of which car is which
                 else:
-                    grid[p[0]][p[1]] = '<>'
-            elif self.car_last_act[i] == 2: #DO WE NEED TO MAKE IT SO CARS CANNOT PASS (I.E CAN CARS GO OVER ANOTHER CAR)
+                    grid[p[0]][p[1]] = '<'+str(i)+'>'
+            elif self.car_last_act[i] == 2:
                 if grid[p[0]][p[1]] != 0: #EMPTY SPACE TWO SPACES IN FRONT
-                    grid[p[0]][p[1]] = str(grid[p[0]][p[1] + 1]).replace('_', '') + '<a>'
+                    grid[p[0]][p[1]] = str(grid[p[0]][p[1] + 1]).replace('_', '') + '<a'+str(i)+'>'
                 else:
-                    grid[p[0]][p[1]] = '<a>'
+                    grid[p[0]][p[1]] = '<a'+str(i)+'>'
             else: # BRAKE
                 if grid[p[0]][p[1]] == 1:
-                    grid[p[0]][p[1]] = str(grid[p[0]][p[1]]).replace('_','') + '<b>'
+                    grid[p[0]][p[1]] = str(grid[p[0]][p[1]]).replace('_','') + '<b'+str(i)+'>'
                 else:
-                    grid[p[0]][p[1]] = '<b>'
+                    grid[p[0]][p[1]] = '<b'+str(i)+'>'
 
         for row_num, row in enumerate(grid):
             for idx, item in enumerate(row):
                 if row_num == idx == 0:
                     continue
                 if item != '_': #This doesn't do a good job at indicating when a crash happens with acceleration
-                    if '<>' in item and len(item) > 3: #CRASH, one car gas
+                    if '<'+str(i)+'>' in item and len(item) > 3: #CRASH, one car gas
                         self.stdscr.addstr(row_num, idx * 4, item.replace('b','').center(3), curses.color_pair(2)) #Yellow
                         self.stdscr.addstr(row_num, idx * 4, item.replace('a', '').center(3), curses.color_pair(2))
-                    elif '<>' in item: #GAS
+                    elif '<'+str(i)+'>' in item: #GAS
                         self.stdscr.addstr(row_num, idx * 4, item.center(3), curses.color_pair(1)) #RED
-                    elif 'a' in item and len(item) > 3:
+                    elif 'a'+str(i)+'' in item and len(item) > 3:
                         self.stdscr.addstr(row_num, idx * 4, item.replace('a', ''), curses.color_pair(2))
-                    elif 'a' in item:
+                    elif 'a'+str(i)+'' in item:
                         self.stdscr.addstr(row_num, idx * 4, item.replace('a', ''), curses.color_pair(3))
-                    elif 'b' in item and len(item) > 3: #CRASH
+                    elif 'b'+str(i)+'' in item and len(item) > 3: #CRASH
                         self.stdscr.addstr(row_num, idx * 4, item.replace('b','').center(3), curses.color_pair(2)) #Yellow
                         self.stdscr.addstr(row_num, idx * 4, item.replace('a', '').center(3), curses.color_pair(2))
-                    elif 'b' in item:
+                    elif 'b'+str(i)+'' in item:
                         self.stdscr.addstr(row_num, idx * 4, item.replace('b','').center(3), curses.color_pair(5)) #BLUE
                     else:
                         self.stdscr.addstr(row_num, idx * 4, item.center(3),  curses.color_pair(2)) #Yellow
@@ -323,7 +357,7 @@ class TrafficJunctionEnv(gym.Env):
 
     def _set_grid(self):
         self.grid = np.full(self.dims[0] * self.dims[1], self.OUTSIDE_CLASS, dtype=int).reshape(self.dims)
-        w, h = self.dims
+        h, w = self.dims
 
         # Mark the roads
         roads = get_road_blocks(w,h, self.difficulty) #Roads are gotten from this function from traffic_helper - returns an array of length two of arrays
@@ -391,7 +425,7 @@ class TrafficJunctionEnv(gym.Env):
         return obs
 
 
-    def _add_cars(self, counter):
+    def _add_cars(self):
         for r_i, routes in enumerate(self.routes):
             if self.cars_in_sys >= self.ncar: #IF WERE ALREADY AT MAX NAGENTS
                 self.isFull = True
@@ -399,10 +433,10 @@ class TrafficJunctionEnv(gym.Env):
 
             # Add car to system and set on path
             #if np.random.uniform() <= self.add_rate:
-            if not self.isFull:
-                if counter % 2 == 0:
+            if self.counter < self.ncar * 2:
+                if self.counter % 2 == 0:
                 # chose dead car on random
-                    idx = counter // 2 #THIS IMPLEMENTS EACH CAR AS THE SUCCESSIVE INDEX
+                    idx = self.counter // 2 #THIS IMPLEMENTS EACH CAR AS THE SUCCESSIVE INDEX
                 # make it alive
                     self.alive_mask[idx] = 1
 
@@ -565,7 +599,24 @@ class TrafficJunctionEnv(gym.Env):
 
     def _take_action(self, idx, act): #Takes index of the action in the list, and act is a 1 or 0. 1 is brake, 0 is gas
         # non-active car
-        time.sleep(.5)
+        time.sleep(.05)
+
+        #print(self.car_loc[idx, 0])
+        #NOTE: self.car_loc is two dimensional. The first column is the position of the ith car, the second column is dim / 2
+
+        #Forces action to be brake if car is crashed with car in front, and it is not the first car. This means that the cars cannot pass each other
+        i = idx
+        while i != 0:
+            if self.car_loc[idx - i, 0] == self.car_loc[idx, 0]:
+                act = 1
+                break
+
+            i = i - 1
+
+        #FIXME: This code works very well in making sure cars don't pass each other. However, it easily causes traffic, because if one car starts braking they all have to brake. Have basically just created a traffic simulator
+        #FIXME: We still have a problem I think where cars move along together - instead of one stopping and the other continuing. I thought this code would have fixed that
+        #FIXME: However, it works in that no cars ever pass each other.
+
         if self.alive_mask[idx] == 0:
             return
 
@@ -659,9 +710,8 @@ class TrafficJunctionEnv(gym.Env):
         #NEED TO CODE SO THAT THERE IS A NEGATIVE REWARD FOR HAVING EMPTY SPOTS IN FRONT AND IN BACK
 
 
-        #FIXME: Can print things if no display. The reset display function gets rid of the print statements. Maybe try to comment out reset display to get both the map and the stats
-        #FIXME: The below code for front car and back car distance does not account for when a car passes another car. Ask Alq if we should let cars pass
-        for i, l in enumerate(self.car_loc): #THIS DOES NOT ACCOUNT FOR THE EVENT IN WHICH THE CARS SWAP POSITIONS. NEED TO MAKE IT SO CARS CAN'T SWAP POSITIONS???
+
+        for i, l in enumerate(self.car_loc):
             currCar = i
             currCarLoc = self.car_loc[i, 0]
             frontCar = i - 1
@@ -672,16 +722,20 @@ class TrafficJunctionEnv(gym.Env):
 
                 if frontCarLoc - currCarLoc > 1:
                     reward[i] += self.FRONT_PENALTY
+            #No negative reward for space behind for now
+            #if currCar != self.ncar - 1: #Don't include last car in this because no back car
+                #backCarLoc = self.car_loc[backCar, 0]
 
-            if currCar != self.ncar - 1: #Don't include last car in this because no back car
-                backCarLoc = self.car_loc[backCar, 0]
+                #if currCarLoc - backCarLoc > 1:
+                    #reward[i] += self.BACK_PENALTY
 
-                if currCarLoc - backCarLoc > 1:
-                    reward[i] += self.BACK_PENALTY
-
+        #This is so if the car accelerates it gets a penalty
 
 
-        print(self.alive_mask)
+
+
+       #print(self.alive_mask)
+       #print(actions)
 
 
 

@@ -48,6 +48,7 @@ class TrafficJunctionEnv(gym.Env):
         self.FRONT_PENALTY = -0.5 #Penalty for not having a car directly in front of you (excluding first car)
         self.BACK_PENALTY = -0.2 #Penalty for not having a car directly behind you (excluding last car)
         self.ACC_PENALTY = -0.05 #Penalty for accelerating (so that the cars are led to stay at constant speed)
+        self.EBRAKE_PENALTY = -.1 #Penalty for emergency braking
 
         self.episode_over = False
         self.has_failed = 0
@@ -70,7 +71,7 @@ class TrafficJunctionEnv(gym.Env):
 
     def init_args(self, parser):
         env = parser.add_argument_group('Traffic Junction task')
-        env.add_argument('--dim', type=int, default=20,
+        env.add_argument('--dim', type=int, default=30,
                          help="Dimension of box (i.e length of road) ")
         env.add_argument('--vision', type=int, default=1,
                          help="Vision of car")
@@ -96,12 +97,19 @@ class TrafficJunctionEnv(gym.Env):
         for key in params:
             setattr(self, key, getattr(args, key))
 
+
+
         self.ncar = args.nagents
         self.h = self.dim
         self.w = 2
         self.dims = dims = (self.h, self.w)
         difficulty = args.difficulty
         vision = args.vision
+
+        #self.speeds = np.zeros(self.ncar)
+        self.speeds = np.full(self.ncar, 1) #THIS IS JUST FOR EASE OF SEEING THE SIMULATION, SET SPEEDS TO 0 IN TRAINING
+
+
 
         if difficulty in ['medium','easy']:
             assert dims[0]%2 == 0, 'Only even dimension supported for now.'
@@ -118,7 +126,7 @@ class TrafficJunctionEnv(gym.Env):
 
         # Define what an agent can do -
         # (0: GAS, 1: BRAKE) i.e. (0: Move 1-step, 1: STAY) - 2 = move two spaces ACCELERATE
-        self.naction = 3
+        self.naction = 4 #0 - emergency brake, 1 - decelerate, 2 - maintain, 3 - accelerate
         self.action_space = spaces.Discrete(self.naction)
 
         # make no. of dims odd for easy case.
@@ -186,6 +194,9 @@ class TrafficJunctionEnv(gym.Env):
         self.alive_mask = np.zeros(self.ncar)
         self.wait = np.zeros(self.ncar)
         self.cars_in_sys = 0
+
+        #self.speeds = np.zeros(self.ncar)
+        self.speeds = np.full(self.ncar, 1) #THIS IS JUST FOR EASE OF MAKING THE SIMULATION, USE ABOVE IN TRAINING
 
         # Chosen path for each car:
         self.chosen_path = [0] * self.ncar
@@ -265,8 +276,10 @@ class TrafficJunctionEnv(gym.Env):
         reward = self._get_reward() #Getting reward for every single car
 
         for i in range(len(reward)):
-            if action[i] == 2:
+            if action[i] == 3:
                 reward[i] += self.ACC_PENALTY
+            if action[i] == 0:
+                reward[i] += self.EBRAKE_PENALTY
 
 
 
@@ -289,7 +302,10 @@ class TrafficJunctionEnv(gym.Env):
             elif self.alive_mask[i] == 0:
                 self.episode_over = True
 
-        print(self.episode_over)
+        #print("Speeds", self.speeds)
+        #print("Actions", action)
+        #print("Alive cars", self.alive_mask)
+        #print("Rewards", reward)
 
         return obs, reward, self.episode_over, debug
 
@@ -597,7 +613,7 @@ class TrafficJunctionEnv(gym.Env):
         return True
 
 
-    def _take_action(self, idx, act): #Takes index of the action in the list, and act is a 1 or 0. 1 is brake, 0 is gas
+    def _take_action(self, idx, act): #Actions - 0: Emergency brake, 1: Decelerate, 2: Maintain, 3:Accelerate
         # non-active car
         time.sleep(.05)
 
@@ -608,14 +624,12 @@ class TrafficJunctionEnv(gym.Env):
         i = idx
         while i != 0:
             if self.car_loc[idx - i, 0] == self.car_loc[idx, 0]:
-                act = 1
+                act = 0 #Emergency brake
                 break
 
             i = i - 1
 
-        #FIXME: This code works very well in making sure cars don't pass each other. However, it easily causes traffic, because if one car starts braking they all have to brake. Have basically just created a traffic simulator
-        #FIXME: We still have a problem I think where cars move along together - instead of one stopping and the other continuing. I thought this code would have fixed that
-        #FIXME: However, it works in that no cars ever pass each other.
+
 
         if self.alive_mask[idx] == 0:
             return
@@ -623,19 +637,31 @@ class TrafficJunctionEnv(gym.Env):
         # add wait time for active cars
         self.wait[idx] += 1
 
-        # action BRAKE i.e STAY
-        if act == 1:
-            self.car_last_act[idx] = 1
+        # action Emergency brake
+        if act == 0:
+            self.car_last_act[idx] = 0
+            self.speeds[idx] = 0
             return
 
-        # GAS or move
-        if act==0:
+        if self.speeds[idx] == 0 and act == 1: #if speed is 0 and action is decelerate, change action to be maintain
+            act = 2
+
+        # Maintain
+        if act==2:
             prev = self.car_route_loc[idx]
-            self.car_route_loc[idx] += 1
+            self.car_route_loc[idx] += self.speeds[idx]
             curr = self.car_route_loc[idx]
 
+            #So cars don't jump each other
+            for i, l in enumerate(self.car_loc):
+                if i < idx:
+                    if curr > l[0] and self.alive_mask[i] != 0:
+                        print("CRASH")
+                        self.car_route_loc[idx] = l[0]
+                        curr = self.car_route_loc[idx]
+
             # car/agent has reached end of its path
-            if curr == len(self.chosen_path[idx]):
+            if curr >= len(self.chosen_path[idx]):
                 self.cars_in_sys -= 1
                 self.alive_mask[idx] = 0
                 self.wait[idx] = 0
@@ -656,20 +682,29 @@ class TrafficJunctionEnv(gym.Env):
             self.car_loc[idx] = curr
 
             # Change last act for color:
-            self.car_last_act[idx] = 0
+            self.car_last_act[idx] = 2
 
-        if act == 2: #This is for accelerate
+        if act == 1: #This is for decelerate
 
 
+            self.speeds[idx] -= 1
             prev = self.car_route_loc[idx]
-            self.car_route_loc[idx] += 2
+            self.car_route_loc[idx] += self.speeds[idx]
             curr = self.car_route_loc[idx]
 
-            for i, l in enumerate(self.car_loc): #I THINK THIS FOR LOOP ACCOUNTS FOR ONE CAR TRYING TO JUMP ANOTHER ONE, AND RETURNS THEM TO SAME POSITION
-                if i != idx and l[0] == curr - 1:
-                    print("CRASH")
-                    self.car_route_loc[idx] -= 1
-                    curr = self.car_route_loc[idx]
+            #for i, l in enumerate(self.car_loc): #I THINK THIS FOR LOOP ACCOUNTS FOR ONE CAR TRYING TO JUMP ANOTHER ONE, AND RETURNS THEM TO SAME POSITION
+                #if i != idx and l[0] == curr - 1:
+                    #print("CRASH")
+                    #self.car_route_loc[idx] -= 1
+                    #curr = self.car_route_loc[idx]
+
+            #This is the new loop for making sure cars don't jump each other
+            for i, l in enumerate(self.car_loc):
+                if i < idx:
+                    if curr > l[0] and self.alive_mask[i] != 0:
+                        #print("CRASH")
+                        self.car_route_loc[idx] = l[0]
+                        curr = self.car_route_loc[idx]
 
 
 
@@ -680,14 +715,42 @@ class TrafficJunctionEnv(gym.Env):
                 self.wait[idx] = 0
 
                 self.car_loc[idx] = np.zeros(len(self.dims), dtype = int)
+                self.is_completed[idx] = 1
                 return
 
             prev = self.chosen_path[idx][prev]
             curr = self.chosen_path[idx][curr]
 
             self.car_loc[idx] = curr
-            self.car_last_act[idx] = 2
+            self.car_last_act[idx] = 1
 
+        if act == 3: #This is for acceleration
+            self.speeds[idx] += 1
+            prev = self.car_route_loc[idx]
+            self.car_route_loc[idx] += self.speeds[idx]
+            curr = self.car_route_loc[idx]
+
+
+            for i, l in enumerate(self.car_loc):
+                if i < idx:
+                    if curr > l[0] and self.alive_mask[i] != 0:
+                        #print("CRASH")
+                        self.car_route_loc[idx] = l[0]
+                        curr = self.car_route_loc[idx]
+
+            if curr >= len(self.chosen_path[idx]):
+                self.cars_in_sys -= 1
+                self.alive_mask[idx] = 0
+                self.wait[idx] = 0
+                self.car_loc[idx] = np.zeros(len(self.dims), dtype = int) #DOES THIS LINE MEAN THAT ALL CAR LOCS ARE RESET WHEN ONE FINISHES? I DON'T THINK SO
+                self.is_completed[idx] = 1
+                return
+
+            prev = self.chosen_path[idx][prev]
+            curr = self.chosen_path[idx][curr]
+
+            self.car_loc[idx] = curr
+            self.car_last_act[idx] = 3
 
 
 
@@ -740,7 +803,7 @@ class TrafficJunctionEnv(gym.Env):
 
 
         reward = self.alive_mask * reward
-        print(reward)
+        #print(reward)
         return reward
 
     def _onehot_initialization(self, a):

@@ -615,7 +615,7 @@ class TrafficJunctionEnv(gym.Env):
 
     def _take_action(self, idx, act): #Actions - 0: Emergency brake, 1: Decelerate, 2: Maintain, 3:Accelerate
         # non-active car
-        time.sleep(.05)
+        #time.sleep(.05)
 
         #print(self.car_loc[idx, 0])
         #NOTE: self.car_loc is two dimensional. The first column is the position of the ith car, the second column is dim / 2
@@ -623,7 +623,7 @@ class TrafficJunctionEnv(gym.Env):
         #Forces action to be brake if car is crashed with car in front, and it is not the first car. This means that the cars cannot pass each other
         i = idx
         while i != 0:
-            if self.car_loc[idx - i, 0] == self.car_loc[idx, 0]:
+            if self.car_loc[idx - i, 0] == self.car_loc[idx, 0] and self.alive_mask[idx - i] != 0:
                 act = 0 #Emergency brake
                 break
 
